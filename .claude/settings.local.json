@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s \"https://api.telegram.org/bot7723153618:AAGjvAxPUZ81foLZmhCZz0rSS0etSgPWmyI/getMe\")",
+      "WebFetch(domain:rapidapi.com)",
+      "WebSearch",
+      "Bash(curl -s \"https://api.github.com/search/code?q=cheapest-gpt-4-turbo-gpt-4-vision-chatgpt-openai-ai-api+rapidapi\" -H \"Accept: application/vnd.github+json\")",
+      "Bash(gh search *)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}
