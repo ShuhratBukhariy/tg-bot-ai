@@ -26,7 +26,7 @@ load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
-GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
+GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image-preview")
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 DB_PATH = os.getenv("DB_PATH", "bot.db")
@@ -234,7 +234,7 @@ async def generate_outfit_image(session: aiohttp.ClientSession, prompt: str):
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "responseModalities": ["IMAGE"],
+            "responseModalities": ["TEXT", "IMAGE"],
         },
     }
 
