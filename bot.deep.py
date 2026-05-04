@@ -26,7 +26,7 @@ load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
-GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-3.1-flash-image-preview")
+GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 DB_PATH = os.getenv("DB_PATH", "bot.db")
@@ -39,7 +39,7 @@ if not TOKEN or not GEMINI_API_KEY:
     raise RuntimeError("BOT_TOKEN va GEMINI_API_KEY .env faylda berilgan bo'lishi shart")
 
 dp = Dispatcher()
-analysis_cache: dict[int, tuple[float, list]] = {}
+analysis_cache: dict[int, tuple[float, dict]] = {}
 
 PROMPT = """Carefully analyze the person in the photo: their body type, build, height impression, skin tone, hair, age range, and gender if visible.
 
@@ -343,8 +343,13 @@ async def start(message: Message) -> None:
     await register_user(message.from_user.id, message.from_user.full_name)
     await message.answer(
         f"Salom, {html.bold(html.quote(message.from_user.full_name))} 👋\n\n"
-        f"📸 Iltimos, kiyimingizdagi rasmni yuboring.\n"
-        f"Men sizga 4 xil imij va har birining narxini aytaman 🛍️\n\n"
+        f"📸 Iltimos, o'zingizning to'liq qomatdagi rasmingizni yuboring.\n\n"
+        f"Men:\n"
+        f"  👤 Tashqi ko'rinishingizni tahlil qilaman\n"
+        f"  🎨 Sizga mos 2-4 ta imij taklif qilaman\n"
+        f"  👕 Har bir imij uchun 2-3 xil variant ko'rsataman\n"
+        f"  💰 Narxlar va do'konlar haqida ma'lumot beraman\n"
+        f"  🖼 Manikenga kiydirilgan kontseptual rasmni yarataman\n\n"
         f"ℹ️ Kuniga {DAILY_LIMIT} ta rasm tahlil qilishingiz mumkin.\n"
         f"/help — yordam"
     )
@@ -354,10 +359,11 @@ async def start(message: Message) -> None:
 async def help_cmd(message: Message) -> None:
     await message.answer(
         "🤖 <b>Foydalanish:</b>\n\n"
-        "1. Kiyimingizdagi rasm yuboring\n"
-        "2. Bot 4 xil imij taklif qiladi\n"
-        "3. Yoqqan imijni tanlang\n"
-        "4. Narxlar va do'konlar ro'yxatini oling\n\n"
+        "1. To'liq qomatdagi rasmingizni yuboring\n"
+        "2. Bot tashqi ko'rinishingizni tahlil qilib, mos imijlarni taklif qiladi\n"
+        "3. Yoqqan imijni tanlang — 2-3 xil variant chiqadi\n"
+        "4. Variantni tanlang — kiyim ro'yxati va narxlar\n"
+        "5. \"🖼 Rasmini ko'rish\" tugmasi orqali AI rasm yarating\n\n"
         "<b>Komandalar:</b>\n"
         "/start — boshlash\n"
         "/help — yordam\n"
