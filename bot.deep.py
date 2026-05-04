@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import time
+from urllib.parse import quote
 
 import aiohttp
 import aiosqlite
@@ -26,8 +27,10 @@ load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
-GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+POLLINATIONS_MODEL = os.getenv("POLLINATIONS_MODEL", "flux")
+IMAGE_WIDTH = int(os.getenv("IMAGE_WIDTH", "768"))
+IMAGE_HEIGHT = int(os.getenv("IMAGE_HEIGHT", "1024"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 DB_PATH = os.getenv("DB_PATH", "bot.db")
 
@@ -226,50 +229,31 @@ async def analyze_image(session: aiohttp.ClientSession, image_bytes: bytes):
 
 
 async def generate_outfit_image(session: aiohttp.ClientSession, prompt: str):
-    url = f"{GEMINI_BASE}/{GEMINI_IMAGE_MODEL}:generateContent"
-    headers = {
-        "x-goog-api-key": GEMINI_API_KEY,
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "responseModalities": ["TEXT", "IMAGE"],
-        },
-    }
+    encoded = quote(prompt, safe="")
+    url = (
+        f"https://image.pollinations.ai/prompt/{encoded}"
+        f"?width={IMAGE_WIDTH}&height={IMAGE_HEIGHT}"
+        f"&model={POLLINATIONS_MODEL}&nologo=true&private=true"
+    )
 
     try:
-        async with session.post(
+        async with session.get(
             url,
-            json=payload,
-            headers=headers,
             timeout=aiohttp.ClientTimeout(total=120),
         ) as res:
             if res.status != 200:
-                logging.error("Gemini image API error %s: %s", res.status, await res.text())
+                body = await res.text()
+                logging.error("Pollinations API error %s: %s", res.status, body[:300])
                 return None
-            data = await res.json()
+            content_type = res.headers.get("Content-Type", "")
+            if not content_type.startswith("image/"):
+                body = await res.text()
+                logging.error("Pollinations non-image response: %s — %s", content_type, body[:300])
+                return None
+            return await res.read()
     except (aiohttp.ClientError, asyncio.TimeoutError):
-        logging.exception("Gemini image API request failed")
+        logging.exception("Pollinations API request failed")
         return None
-
-    try:
-        parts = data["candidates"][0]["content"]["parts"]
-    except (KeyError, IndexError, TypeError):
-        logging.error("No candidates in Gemini image response: %s", str(data)[:500])
-        return None
-
-    for part in parts:
-        inline = part.get("inline_data") or part.get("inlineData")
-        if isinstance(inline, dict) and inline.get("data"):
-            try:
-                return base64.b64decode(inline["data"])
-            except (ValueError, TypeError):
-                logging.exception("Invalid base64 in image response")
-                return None
-
-    logging.error("No image data in Gemini parts: %s", str(data)[:500])
-    return None
 
 
 def build_image_prompt(style_name: str, variant: dict) -> str:
