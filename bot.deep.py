@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 import logging
 import os
@@ -28,8 +27,7 @@ RAPID_HOST = os.getenv(
     "RAPID_HOST",
     "cheapest-gpt-4-turbo-gpt-4-vision-chatgpt-openai-ai-api.p.rapidapi.com",
 )
-RAPID_ENDPOINT = os.getenv("RAPID_ENDPOINT", "/v1/chat/completions")
-RAPID_MODEL = os.getenv("RAPID_MODEL", "gpt-4o")
+RAPID_ENDPOINT = os.getenv("RAPID_ENDPOINT", "/matagvision")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 DB_PATH = os.getenv("DB_PATH", "bot.db")
 
@@ -131,8 +129,7 @@ def cache_cleanup() -> None:
         analysis_cache.pop(uid, None)
 
 
-async def analyze_image(session: aiohttp.ClientSession, image_bytes: bytes):
-    b64 = base64.b64encode(image_bytes).decode("utf-8")
+async def analyze_image(session: aiohttp.ClientSession, image_url: str):
     url = f"https://{RAPID_HOST}{RAPID_ENDPOINT}"
     headers = {
         "x-rapidapi-key": RAPID_API_KEY,
@@ -140,21 +137,13 @@ async def analyze_image(session: aiohttp.ClientSession, image_bytes: bytes):
         "Content-Type": "application/json",
     }
     payload = {
-        "model": RAPID_MODEL,
         "messages": [
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": PROMPT},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-                    },
-                ],
+                "content": PROMPT,
+                "img_url": image_url,
             }
-        ],
-        "max_tokens": 1500,
-        "temperature": 0.5,
+        ]
     }
 
     try:
@@ -162,7 +151,7 @@ async def analyze_image(session: aiohttp.ClientSession, image_bytes: bytes):
             url,
             json=payload,
             headers=headers,
-            timeout=aiohttp.ClientTimeout(total=45),
+            timeout=aiohttp.ClientTimeout(total=60),
         ) as res:
             if res.status != 200:
                 logging.error("API error %s: %s", res.status, await res.text())
@@ -172,12 +161,24 @@ async def analyze_image(session: aiohttp.ClientSession, image_bytes: bytes):
         logging.exception("API request failed")
         return None
 
-    try:
-        content = data["choices"][0]["message"]["content"].strip()
-    except (KeyError, IndexError, TypeError):
-        logging.exception("Unexpected API response shape: %s", data)
+    content = None
+    if isinstance(data, dict):
+        for key in ("result", "response", "answer", "content", "message", "text", "output", "data"):
+            v = data.get(key)
+            if isinstance(v, str) and v.strip():
+                content = v
+                break
+        if content is None:
+            try:
+                content = data["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError):
+                pass
+
+    if not content:
+        logging.error("Unknown response shape: %s", str(data)[:500])
         return None
 
+    content = content.strip()
     if "```" in content:
         try:
             content = content.split("```", 2)[1]
@@ -307,19 +308,7 @@ async def photo_handler(message: Message) -> None:
         file_url = f"https://api.telegram.org/file/bot{TOKEN}/{file.file_path}"
 
         async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(
-                    file_url, timeout=aiohttp.ClientTimeout(total=20)
-                ) as r:
-                    if r.status != 200:
-                        await processing.edit_text("❌ Rasmni yuklab bo'lmadi.")
-                        return
-                    image_bytes = await r.read()
-            except (aiohttp.ClientError, asyncio.TimeoutError):
-                await processing.edit_text("❌ Rasm yuklanmadi. Qayta urinib ko'ring.")
-                return
-
-            result = await analyze_image(session, image_bytes)
+            result = await analyze_image(session, file_url)
 
         if not result or not isinstance(result.get("styles"), list) or not result["styles"]:
             await processing.edit_text(
