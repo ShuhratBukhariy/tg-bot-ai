@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -13,6 +14,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
+    BufferedInputFile,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -22,16 +24,10 @@ from aiogram.types import (
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
-RAPID_API_KEY = os.getenv("RAPID_API_KEY")
-RAPID_HOST = os.getenv(
-    "RAPID_HOST",
-    "cheapest-gpt-4-turbo-gpt-4-vision-chatgpt-openai-ai-api.p.rapidapi.com",
-)
-RAPID_ENDPOINT = os.getenv("RAPID_ENDPOINT", "/matagvision")
-RAPID_IMAGE_ENDPOINT = os.getenv("RAPID_IMAGE_ENDPOINT", "/texttoimage3")
-IMAGE_WIDTH = int(os.getenv("IMAGE_WIDTH", "512"))
-IMAGE_HEIGHT = int(os.getenv("IMAGE_HEIGHT", "768"))
-IMAGE_STEPS = int(os.getenv("IMAGE_STEPS", "4"))
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_VISION_MODEL = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
+GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image-preview")
+GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 DB_PATH = os.getenv("DB_PATH", "bot.db")
 
@@ -39,8 +35,8 @@ DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "5"))
 ANALYSIS_TTL = int(os.getenv("ANALYSIS_TTL", "3600"))
 MAX_PHOTO_BYTES = 5 * 1024 * 1024
 
-if not TOKEN or not RAPID_API_KEY:
-    raise RuntimeError("BOT_TOKEN va RAPID_API_KEY .env faylda berilgan bo'lishi shart")
+if not TOKEN or not GEMINI_API_KEY:
+    raise RuntimeError("BOT_TOKEN va GEMINI_API_KEY .env faylda berilgan bo'lishi shart")
 
 dp = Dispatcher()
 analysis_cache: dict[int, tuple[float, list]] = {}
@@ -168,21 +164,27 @@ def cache_cleanup() -> None:
         analysis_cache.pop(uid, None)
 
 
-async def analyze_image(session: aiohttp.ClientSession, image_url: str):
-    url = f"https://{RAPID_HOST}{RAPID_ENDPOINT}"
+async def analyze_image(session: aiohttp.ClientSession, image_bytes: bytes):
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+    url = f"{GEMINI_BASE}/{GEMINI_VISION_MODEL}:generateContent"
     headers = {
-        "x-rapidapi-key": RAPID_API_KEY,
-        "x-rapidapi-host": RAPID_HOST,
+        "x-goog-api-key": GEMINI_API_KEY,
         "Content-Type": "application/json",
     }
     payload = {
-        "messages": [
+        "contents": [
             {
-                "role": "user",
-                "content": PROMPT,
-                "img_url": image_url,
+                "parts": [
+                    {"text": PROMPT},
+                    {"inline_data": {"mime_type": "image/jpeg", "data": b64}},
+                ]
             }
-        ]
+        ],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.5,
+            "maxOutputTokens": 4096,
+        },
     }
 
     try:
@@ -190,62 +192,50 @@ async def analyze_image(session: aiohttp.ClientSession, image_url: str):
             url,
             json=payload,
             headers=headers,
-            timeout=aiohttp.ClientTimeout(total=60),
+            timeout=aiohttp.ClientTimeout(total=90),
         ) as res:
             if res.status != 200:
-                logging.error("API error %s: %s", res.status, await res.text())
+                logging.error("Gemini API error %s: %s", res.status, await res.text())
                 return None
             data = await res.json()
     except (aiohttp.ClientError, asyncio.TimeoutError):
-        logging.exception("API request failed")
+        logging.exception("Gemini API request failed")
         return None
 
-    content = None
-    if isinstance(data, dict):
-        for key in ("result", "response", "answer", "content", "message", "text", "output", "data"):
-            v = data.get(key)
-            if isinstance(v, str) and v.strip():
-                content = v
-                break
-        if content is None:
-            try:
-                content = data["choices"][0]["message"]["content"]
-            except (KeyError, IndexError, TypeError):
-                pass
-
-    if not content:
-        logging.error("Unknown response shape: %s", str(data)[:500])
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        logging.error("Unknown Gemini response: %s", str(data)[:500])
         return None
 
-    content = content.strip()
-    if "```" in content:
+    text = text.strip()
+    if "```" in text:
         try:
-            content = content.split("```", 2)[1]
-            if content.startswith("json"):
-                content = content[4:]
-            content = content.strip()
+            text = text.split("```", 2)[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
         except IndexError:
             pass
 
     try:
-        return json.loads(content)
+        return json.loads(text)
     except json.JSONDecodeError:
-        logging.exception("JSON parse failed: %s", content[:300])
+        logging.exception("JSON parse failed: %s", text[:300])
         return None
 
 
 async def generate_outfit_image(session: aiohttp.ClientSession, prompt: str):
-    url = f"https://{RAPID_HOST}{RAPID_IMAGE_ENDPOINT}"
+    url = f"{GEMINI_BASE}/{GEMINI_IMAGE_MODEL}:generateContent"
     headers = {
-        "x-rapidapi-key": RAPID_API_KEY,
-        "x-rapidapi-host": RAPID_HOST,
+        "x-goog-api-key": GEMINI_API_KEY,
         "Content-Type": "application/json",
     }
     payload = {
-        "text": prompt,
-        "width": IMAGE_WIDTH,
-        "height": IMAGE_HEIGHT,
-        "steps": IMAGE_STEPS,
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseModalities": ["IMAGE"],
+        },
     }
 
     try:
@@ -253,23 +243,32 @@ async def generate_outfit_image(session: aiohttp.ClientSession, prompt: str):
             url,
             json=payload,
             headers=headers,
-            timeout=aiohttp.ClientTimeout(total=60),
+            timeout=aiohttp.ClientTimeout(total=120),
         ) as res:
             if res.status != 200:
-                logging.error("Image API error %s: %s", res.status, await res.text())
+                logging.error("Gemini image API error %s: %s", res.status, await res.text())
                 return None
             data = await res.json()
     except (aiohttp.ClientError, asyncio.TimeoutError):
-        logging.exception("Image API request failed")
+        logging.exception("Gemini image API request failed")
         return None
 
-    if isinstance(data, dict):
-        for key in ("generated_image", "image_url", "url", "image", "result", "output"):
-            v = data.get(key)
-            if isinstance(v, str) and v.startswith(("http://", "https://")):
-                return v
+    try:
+        parts = data["candidates"][0]["content"]["parts"]
+    except (KeyError, IndexError, TypeError):
+        logging.error("No candidates in Gemini image response: %s", str(data)[:500])
+        return None
 
-    logging.error("Unknown image response: %s", str(data)[:300])
+    for part in parts:
+        inline = part.get("inline_data") or part.get("inlineData")
+        if isinstance(inline, dict) and inline.get("data"):
+            try:
+                return base64.b64decode(inline["data"])
+            except (ValueError, TypeError):
+                logging.exception("Invalid base64 in image response")
+                return None
+
+    logging.error("No image data in Gemini parts: %s", str(data)[:500])
     return None
 
 
@@ -423,7 +422,19 @@ async def photo_handler(message: Message) -> None:
         file_url = f"https://api.telegram.org/file/bot{TOKEN}/{file.file_path}"
 
         async with aiohttp.ClientSession() as session:
-            result = await analyze_image(session, file_url)
+            try:
+                async with session.get(
+                    file_url, timeout=aiohttp.ClientTimeout(total=20)
+                ) as r:
+                    if r.status != 200:
+                        await processing.edit_text("❌ Rasmni yuklab bo'lmadi.")
+                        return
+                    image_bytes = await r.read()
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                await processing.edit_text("❌ Rasm yuklanmadi. Qayta urinib ko'ring.")
+                return
+
+            result = await analyze_image(session, image_bytes)
 
         if not result or not isinstance(result.get("styles"), list) or not result["styles"]:
             await processing.edit_text(
@@ -552,35 +563,26 @@ async def generate_image_callback(callback: CallbackQuery) -> None:
         await callback.answer("Xato", show_alert=True)
         return
 
-    cached_url = variant.get("_image_url")
-    if cached_url:
-        await callback.answer("📤 Rasm yuborilmoqda...")
-        try:
-            await callback.message.answer_photo(
-                photo=cached_url,
-                caption=f"✨ <b>{html.quote(str(style.get('name', '')))} → {html.quote(str(variant.get('name', '')))}</b>\n\n🤖 AI tomonidan yaratilgan kontseptual rasm",
-            )
-        except Exception:
-            logging.exception("Failed to send cached photo")
-            await callback.message.answer(f"⚠️ Rasm yuborishda xatolik:\n{cached_url}")
-        return
+    caption = (
+        f"✨ <b>{html.quote(str(style.get('name', '')))} → "
+        f"{html.quote(str(variant.get('name', '')))}</b>\n\n"
+        f"🤖 AI tomonidan yaratilgan kontseptual rasm"
+    )
 
     await callback.answer("⏳ Rasm yaratilmoqda...")
-    waiting_msg = await callback.message.answer("🎨 Rasm yaratilmoqda... (10-20 soniya)")
+    waiting_msg = await callback.message.answer("🎨 Rasm yaratilmoqda... (10-30 soniya)")
 
     prompt = build_image_prompt(str(style.get("name", "")), variant)
 
     async with aiohttp.ClientSession() as session:
-        image_url = await generate_outfit_image(session, prompt)
+        image_bytes = await generate_outfit_image(session, prompt)
 
-    if not image_url:
+    if not image_bytes:
         try:
             await waiting_msg.edit_text("❌ Rasm yaratishda xatolik. Qayta urinib ko'ring.")
         except Exception:
             pass
         return
-
-    variant["_image_url"] = image_url
 
     try:
         await waiting_msg.delete()
@@ -588,15 +590,11 @@ async def generate_image_callback(callback: CallbackQuery) -> None:
         pass
 
     try:
-        await callback.message.answer_photo(
-            photo=image_url,
-            caption=f"✨ <b>{html.quote(str(style.get('name', '')))} → {html.quote(str(variant.get('name', '')))}</b>\n\n🤖 AI tomonidan yaratilgan kontseptual rasm",
-        )
+        photo = BufferedInputFile(image_bytes, filename="outfit.png")
+        await callback.message.answer_photo(photo=photo, caption=caption)
     except Exception:
-        logging.exception("Failed to send photo")
-        await callback.message.answer(
-            f"⚠️ Rasm yaratildi, lekin yuborib bo'lmadi. Linkdan oching:\n{image_url}"
-        )
+        logging.exception("Failed to send generated photo")
+        await callback.message.answer("⚠️ Rasm yaratildi, lekin yuborib bo'lmadi.")
 
 
 @dp.callback_query(F.data == "back_to_styles")
