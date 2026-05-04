@@ -183,7 +183,7 @@ async def analyze_image(session: aiohttp.ClientSession, image_bytes: bytes):
         "generationConfig": {
             "responseMimeType": "application/json",
             "temperature": 0.5,
-            "maxOutputTokens": 4096,
+            "maxOutputTokens": 8192,
         },
     }
 
